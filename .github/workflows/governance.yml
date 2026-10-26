@@ -1,0 +1,90 @@
+# Governance gates that run on every pull request into main or dev.
+# Job names below become the status-check names required by the branch rulesets.
+name: governance
+
+on:
+  pull_request:
+    branches: [main, dev]
+    types: [opened, edited, synchronize, reopened]
+
+# Least privilege: read-only token for every job.
+permissions:
+  contents: read
+
+concurrency:
+  group: governance-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  pr-title:
+    name: PR title follows Conventional Commits
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Check title
+        env:
+          TITLE: ${{ github.event.pull_request.title }}
+        run: |
+          pattern='^(feat|fix|chore|docs|test|refactor|perf|ci|build|revert)(\([a-z0-9-]+\))?!?: .{3,}$'
+          if ! printf '%s' "$TITLE" | grep -Eq "$pattern"; then
+            echo "::error::PR title must follow Conventional Commits, e.g. 'feat: add resource request form'. Got: '$TITLE'"
+            exit 1
+          fi
+          echo "Title OK: $TITLE"
+
+  pr-checklist:
+    name: PR checklist and AI declaration
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    # Dependabot PRs do not use the template; a skipped job counts as passed.
+    if: github.actor != 'dependabot[bot]'
+    steps:
+      - name: Check PR body
+        env:
+          BODY: ${{ github.event.pull_request.body }}
+        run: |
+          body=$(printf '%s' "$BODY" | tr -d '\r')
+
+          ai=$(printf '%s\n' "$body" | grep -Ec '^- \[[xX]\] (No AI assistance|AI-assisted)' || true)
+          if [ "$ai" -ne 1 ]; then
+            echo "::error::Tick exactly one box under 'AI assistance' in the PR description."
+            exit 1
+          fi
+
+          unticked=$(printf '%s\n' "$body" | sed -n '/^## Author checklist/,/^## /p' | grep -c '^- \[ \]' || true)
+          if [ "$unticked" -gt 0 ]; then
+            echo "::error::$unticked item(s) in 'Author checklist' are not ticked. Tick them all, or explain in the PR why an item does not apply and tick it."
+            exit 1
+          fi
+          echo "Checklist OK"
+
+  openspec-validate:
+    name: OpenSpec validation
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      OPENSPEC_TELEMETRY: "0"
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "22"
+      - name: Install OpenSpec
+        # Pin the version with a repository variable OPENSPEC_VERSION (Settings > Secrets and variables > Actions > Variables).
+        run: npm install -g "@fission-ai/openspec@${{ vars.OPENSPEC_VERSION || 'latest' }}"
+      - name: Validate all changes and specs
+        run: openspec validate --all --strict
+
+  dependency-review:
+    name: Dependency review
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/dependency-review-action@2031cfc080254a8a887f58cffee85186f0e49e48 # v4
+        with:
+          fail-on-severity: high

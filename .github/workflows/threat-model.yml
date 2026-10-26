@@ -1,0 +1,59 @@
+# Fails a pull request that changes security-sensitive paths without updating
+# docs/security/threat-model.md, unless the author explicitly confirms that no
+# update is needed. Uses no third-party actions (only the preinstalled gh CLI).
+name: threat-model
+
+on:
+  pull_request:
+    branches: [main, dev]
+    types: [opened, edited, synchronize, reopened]
+
+permissions:
+  contents: read
+  pull-requests: read
+
+concurrency:
+  group: threat-model-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  threat-model:
+    name: Threat model updated for sensitive changes
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    # Dependabot only bumps pinned versions; a skipped job counts as passed.
+    if: github.actor != 'dependabot[bot]'
+    steps:
+      - name: Check threat model coverage
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+          BODY: ${{ github.event.pull_request.body }}
+          # Edit this pattern per project to match its security-sensitive paths.
+          SENSITIVE: '(^|/)(auth|rbac|security|crypto|uploads?|migrations)/|^infra/|^\.github/workflows/|^\.claude/|(^|/)Dockerfile$|\.tf$'
+          MODEL: docs/security/threat-model.md
+        run: |
+          files=$(gh api "repos/$REPO/pulls/$PR/files" --paginate --jq '.[].filename')
+
+          sensitive=$(printf '%s\n' "$files" | grep -E "$SENSITIVE" || true)
+          if [ -z "$sensitive" ]; then
+            echo "No security-sensitive files changed."
+            exit 0
+          fi
+
+          echo "Security-sensitive files changed:"
+          printf '  %s\n' $sensitive
+
+          if printf '%s\n' "$files" | grep -qx "$MODEL"; then
+            echo "Threat model updated in this pull request."
+            exit 0
+          fi
+
+          if printf '%s' "$BODY" | tr -d '\r' | grep -Eq '^- \[[xX]\] Threat model: no update needed'; then
+            echo "Author confirmed no threat model update is needed (reason in PR description)."
+            exit 0
+          fi
+
+          echo "::error::Security-sensitive files changed but $MODEL was not updated. Update it, or tick 'Threat model: no update needed' in the PR description and explain why."
+          exit 1

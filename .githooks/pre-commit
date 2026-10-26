@@ -1,0 +1,26 @@
+#!/bin/sh
+# Pre-commit secret scan (ai-dev-template).
+# Blocks a commit if staged changes contain a secret.
+# Enable once per clone:  git config core.hooksPath .githooks
+# Applies to commits made by people and by AI coding assistants alike.
+
+if ! command -v gitleaks >/dev/null 2>&1; then
+  echo "BLOCKED: gitleaks is not installed. See TEMPLATE-SETUP.md (Developer machines)." >&2
+  exit 1
+fi
+
+# gitleaks 8.19+ uses 'gitleaks git --pre-commit'; older versions use 'gitleaks protect'.
+if gitleaks git --help >/dev/null 2>&1; then
+  gitleaks git --pre-commit --staged --redact --no-banner --verbose
+else
+  gitleaks protect --staged --redact --no-banner --verbose
+fi
+status=$?
+
+if [ $status -ne 0 ]; then
+  echo "" >&2
+  echo "BLOCKED: possible secret in staged changes (details above, values redacted)." >&2
+  echo "Remove it from the file, unstage it, and if it was a real secret, rotate it now." >&2
+  exit 1
+fi
+exit 0

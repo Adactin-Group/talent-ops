@@ -1,0 +1,31 @@
+# CODEOWNERS — who must approve changes to which paths.
+# TEMPLATE: replace Adactin-Group with the GitHub organisation name.
+# Notes:
+# - The LAST matching line wins. Keep specific paths below general ones.
+# - Approval from ANY one owner listed on a line satisfies that line.
+# - Teams listed here must have Write access to the repository.
+
+# Default: an engineering lead reviews everything
+*                         @Adactin-Group/leads
+
+# Governance, pipelines and AI-assistant configuration
+/.github/                 @Adactin-Group/platform-admins
+/.claude/                 @Adactin-Group/platform-admins
+/CLAUDE.md                @Adactin-Group/platform-admins
+/openspec/config.yaml     @Adactin-Group/platform-admins
+/TEMPLATE-SETUP.md        @Adactin-Group/platform-admins
+
+# Security policy
+/SECURITY.md              @Adactin-Group/security-reviewers
+
+# Infrastructure as code
+/infra/                   @Adactin-Group/platform-admins
+
+# Security-sensitive application code (adjust paths per project)
+**/auth/                  @Adactin-Group/security-reviewers
+**/rbac/                  @Adactin-Group/security-reviewers
+**/security/              @Adactin-Group/security-reviewers
+**/migrations/            @Adactin-Group/leads
+
+# Threat model
+/docs/security/          @Adactin-Group/security-reviewers

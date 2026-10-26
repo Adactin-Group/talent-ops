@@ -1,0 +1,63 @@
+schema: spec-driven
+
+# -----------------------------------------------------------------------------
+# ai-dev-template — OpenSpec governance configuration
+# TEMPLATE: replace every <PLACEHOLDER> when a new project is created
+# (see TEMPLATE-SETUP.md). Changes to this file require platform-admin review.
+# -----------------------------------------------------------------------------
+
+# Project context: constraints an agent cannot infer from the code.
+context: |
+  Project: <PROJECT_NAME> - <ONE_LINE_PURPOSE>.
+  Business owner: <BUSINESS_OWNER>. Engineering lead: <ENGINEERING_LEAD>.
+  Risk tier: <1|2|3|4> under the Adactin AI Governance Framework.
+  Data classification: <synthetic|internal|confidential|highly-confidential>.
+  Non-production environments use synthetic data only.
+
+  Governance rules (non-negotiable):
+  - AI output is a draft. Never invent business policy, permissions, retention
+    periods, legal obligations, prices, SLAs or approvals. Record them as open
+    questions for the named human owner.
+  - Verify versions, cloud service capabilities, prices and legal claims against
+    primary sources and cite them. Mark anything not verified as UNVERIFIED.
+  - Least privilege: deny-by-default authorization, no standing admin access,
+    managed identities instead of stored credentials.
+  - No secrets, credentials, real personal data or client data in code, specs,
+    prompts, logs, screenshots or test fixtures.
+  - Prefer the simplest design that meets the requirement. No new services,
+    queues, frameworks or infrastructure without a stated, evidenced need.
+  - Changes reach any environment only through a pull request and the CI
+    pipeline, never through local deploy or apply commands.
+
+# Per-artifact rules
+rules:
+  proposal:
+    - Name the business owner who confirmed the requirement, or mark it UNCONFIRMED.
+    - List confirmed requirements, assumptions and open questions separately.
+    - State what is out of scope.
+    - State whether the change touches personal data, authentication, authorization, file uploads, payments, external integrations or AI features; if so, it needs security review.
+    - Keep under 600 words.
+  specs:
+    - Every requirement has at least one WHEN/THEN scenario.
+    - Any requirement that reads or changes data includes at least one unauthorised-access scenario that must be denied.
+  design:
+    - Include a Security section covering authentication, authorization, data classification, input validation, logging without personal data, and STRIDE notes for new endpoints, uploads and integrations.
+    - Record significant decisions with the alternatives considered and the consequence of being wrong.
+    - Justify every new third-party dependency (purpose, maintainer, licence, alternatives).
+  tasks:
+    - Keep each task to 2 hours or less.
+    - Pair every implementation task with a test task, including authorization tests.
+    - End with tasks to run lint, tests and `openspec validate --strict`.
+
+# Per-operation guidance
+operations:
+  apply:
+    guidance:
+      - Work only on a feature branch; never commit directly to main or dev.
+      - Do not modify .github/, .claude/, CLAUDE.md, SECURITY.md or openspec/config.yaml unless the change is explicitly a governance change.
+      - Run tests before marking a task complete.
+      - Stop and ask a human if a task needs secrets, cloud credentials, production access or a business decision.
+  archive:
+    guidance:
+      - Archive only after the pull request is merged and CI is green.
+      - Summarise what changed, what was deferred and any open questions.

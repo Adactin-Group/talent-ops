@@ -1,0 +1,102 @@
+# Weekly governance report: turns GitHub data into the framework's engineering metrics.
+# Read-only. Uses no third-party actions. Results appear in the run's Summary page
+# (Actions -> governance-report -> latest run). Run it any time with "Run workflow".
+name: governance-report
+
+on:
+  schedule:
+    - cron: "0 22 * * 0"   # Sundays 22:00 UTC = Monday 08:00/09:00 Sydney
+  workflow_dispatch:
+    inputs:
+      days:
+        description: "Reporting period in days"
+        default: "7"
+
+permissions:
+  contents: read
+  pull-requests: read
+  actions: read
+  security-events: read
+
+jobs:
+  report:
+    name: Governance report
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Build report
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          DAYS: ${{ inputs.days || '7' }}
+        run: |
+          set -uo pipefail
+          since=$(date -u -d "${DAYS} days ago" +%Y-%m-%dT%H:%M:%SZ)
+          since_day=${since%%T*}
+          out=$(mktemp -d)
+
+          # --- Pull requests merged into main in the period ---
+          gh api "repos/$REPO/pulls?state=closed&base=main&sort=updated&direction=desc&per_page=100" > "$out/closed.json" 2>/dev/null || echo '[]' > "$out/closed.json"
+          jq -s --arg s "$since" 'add // [] | [ .[] | select(.merged_at != null and .merged_at >= $s)
+            | {n: .number, user: .user.login, body: (.body // ""), c: .created_at, m: .merged_at} ]' "$out/closed.json" > "$out/merged.json"
+          merged=$(jq length "$out/merged.json")
+
+          approved=0
+          for n in $(jq -r '.[].n' "$out/merged.json"); do
+            a=$(gh api "repos/$REPO/pulls/$n/reviews" --jq '[.[] | select(.state=="APPROVED")] | length' 2>/dev/null || echo 0)
+            [ "${a:-0}" -gt 0 ] && approved=$((approved+1))
+          done
+
+          ai=$(jq '[.[] | select(.body | test("(?m)^- \\[[xX]\\] AI-assisted"))] | length' "$out/merged.json")
+          noai=$(jq '[.[] | select(.body | test("(?m)^- \\[[xX]\\] No AI assistance"))] | length' "$out/merged.json")
+          override=$(jq '[.[] | select(.body | test("(?m)^- \\[[xX]\\] Threat model: no update needed"))] | length' "$out/merged.json")
+          bots=$(jq '[.[] | select(.user | test("\\[bot\\]$"))] | length' "$out/merged.json")
+          median_h=$(jq '[.[] | ((.m|fromdateiso8601) - (.c|fromdateiso8601))/3600] | sort
+            | if length==0 then "n/a" elif length%2==1 then .[length/2|floor] else (.[length/2-1]+.[length/2])/2 end
+            | if type=="number" then (.*10|round/10) else . end' "$out/merged.json")
+
+          # --- Open pull requests older than 7 days ---
+          stale=$(gh api "repos/$REPO/pulls?state=open&per_page=100" 2>/dev/null \
+            | jq --arg s "$(date -u -d '7 days ago' +%Y-%m-%dT%H:%M:%SZ)" '[.[] | select(.created_at < $s)] | length' 2>/dev/null || echo "n/a")
+
+          # --- Governance and threat-model check runs ---
+          gh api "repos/$REPO/actions/runs?created=>=$since_day&event=pull_request&per_page=100" > "$out/runs.json" 2>/dev/null || echo '{"workflow_runs":[]}' > "$out/runs.json"
+          runs_total=$(jq '[.workflow_runs[] | select(.name=="governance" or .name=="threat-model")] | length' "$out/runs.json")
+          runs_failed=$(jq '[.workflow_runs[] | select((.name=="governance" or .name=="threat-model") and (.conclusion=="failure" or .conclusion=="startup_failure"))] | length' "$out/runs.json")
+
+          # --- Code scanning alerts (CodeQL) ---
+          if gh api "repos/$REPO/code-scanning/alerts?state=open&per_page=100" > "$out/cs.json" 2>/dev/null; then
+            cs_high=$(jq '[.[] | select((.rule.security_severity_level // .rule.severity) | test("critical|high|error"))] | length' "$out/cs.json")
+            cs_total=$(jq length "$out/cs.json")
+          else
+            cs_high="n/a"; cs_total="n/a"
+          fi
+
+          # --- Ruleset enforcement: blocked pushes and bypasses ---
+          rs() { gh api "repos/$REPO/rulesets/rule-suites?time_period=week&rule_suite_result=$1&per_page=100" --jq length 2>/dev/null || echo "n/a"; }
+          rs_fail=$(rs fail); rs_bypass=$(rs bypass)
+
+          pct() { if [ "$2" -gt 0 ]; then echo "$(( $1 * 100 / $2 ))%"; else echo "n/a"; fi; }
+          flag() { case "$1" in n/a) echo "-";; *) if [ "$1" "$2" "$3" ]; then echo "OK"; else echo "ACTION"; fi;; esac; }
+          human=$((merged - bots))
+
+          {
+            echo "## Governance report — $REPO"
+            echo
+            echo "Period: last $DAYS days (since $since). Generated $(date -u +%Y-%m-%dT%H:%MZ)."
+            echo
+            echo "| Metric | Value | Target | Status |"
+            echo "|---|---|---|---|"
+            echo "| PRs merged into main | $merged ($bots by bots) | — | — |"
+            echo "| Merged with an approving review | $approved / $merged ($(pct $approved $merged)) | 100% once 2+ reviewers | — |"
+            echo "| Human PRs declaring AI use (AI-assisted / none) | $ai / $noai of $human | all declared | $( [ $((ai+noai)) -ge $human ] && echo OK || echo ACTION ) |"
+            echo "| Threat-model overrides used | $override | reviewed by security | $( [ "$override" -eq 0 ] && echo OK || echo REVIEW ) |"
+            echo "| Median hours open → merge | $median_h | trend down | — |"
+            echo "| Open PRs older than 7 days | $stale | 0 | $(flag "$stale" -eq 0) |"
+            echo "| Governance check runs failed / total | $runs_failed / $runs_total | trend down | — |"
+            echo "| Open code-scanning alerts (critical+high / all) | $cs_high / $cs_total | 0 critical+high | $(flag "$cs_high" -eq 0) |"
+            echo "| Pushes blocked by rulesets (7 days) | $rs_fail | informational | — |"
+            echo "| Ruleset bypasses (7 days) | $rs_bypass | 0 | $(flag "$rs_bypass" -eq 0) |"
+            echo
+            echo "Dependabot and secret-scanning alerts are not readable with the workflow token; review them under **Security → Vulnerability alerts / Secret scanning**."
+          } >> "${GITHUB_STEP_SUMMARY:-/dev/stdout}"
